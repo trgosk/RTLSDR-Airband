@@ -274,6 +274,9 @@ struct device_t {
 	int waveend;
 	int waveavail;
 	THREAD controller_thread;
+#ifdef VOXZMQ
+	THREAD vox_zmq_thread;
+#endif
 	struct freq_tag tag_queue[TAG_QUEUE_LEN];
 	int tq_head, tq_tail;
 	int last_frequency;

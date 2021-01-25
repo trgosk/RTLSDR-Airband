@@ -73,6 +73,11 @@ ifeq ($(PULSE), 1)
   DEPS += pulse.o
 endif
 
+ifeq ($(VOXZMQ), 1)
+  CFLAGS += -DVOXZMQ
+  LDLIBS += -lzmq
+endif
+
 ifeq ($(WITH_RTLSDR), 1)
   CFLAGS += -DWITH_RTLSDR
   DEPS += input-rtlsdr.o

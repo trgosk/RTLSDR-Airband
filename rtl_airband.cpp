@@ -68,6 +68,9 @@
 #include <lame/lame.h>
 #include "input-common.h"
 #include "rtl_airband.h"
+#ifdef VOXZMQ
+#include <zmq.hpp>
+#endif
 
 #ifdef WITH_PROFILING
 #include "gperftools/profiler.h"
@@ -88,6 +91,10 @@ volatile int do_exit = 0;
 bool use_localtime = false;
 bool multiple_demod_threads = false;
 bool log_scan_activity = false;
+#ifdef VOXZMQ
+bool vox_zmq_enabled = false;
+const char *vox_zmq_host = "tcp://*:5555";
+#endif
 char *stats_filepath = NULL;
 size_t fft_size_log = DEFAULT_FFT_SIZE_LOG;
 size_t fft_size = 1 << fft_size_log;
@@ -122,6 +129,82 @@ BOOL WINAPI sighandler(int signum) {
 }
 #endif
 
+#ifdef VOXZMQ
+time_t getTimeStamp() {
+	time_t now;
+	time(&now);
+	return now;
+}
+
+std::string getTimeStampStr() {
+	time_t ts = getTimeStamp();
+	std::stringstream ss;
+
+	ss << std::put_time(localtime(&ts), "%Y-%m-%d %H:%M:%S");
+
+	return ss.str();
+}
+
+void* vox_zmq_thread(void* params) {
+	char description[40];
+
+	if(vox_zmq_enabled==false) return 0;
+
+	zmq::context_t context(1);
+    zmq::socket_t publisher(context, ZMQ_PUB);
+    publisher.bind(vox_zmq_host);
+	
+	snprintf(description, sizeof(description), "VOX hello1 %s", getTimeStampStr().c_str());
+    zmq::message_t message_hello1(&description[0], strlen(description));
+	publisher.send(message_hello1, zmq::send_flags::none);
+	
+	SLEEP(200);
+	snprintf(description, sizeof(description), "VOX hello2 %s", getTimeStampStr().c_str());
+    zmq::message_t message_hello2(&description[0], strlen(description));
+	publisher.send(message_hello2, zmq::send_flags::none);
+
+	const unsigned char SIGNAL_START = 255, SIGNAL_STOP = 0;
+	device_t *dev = (device_t*)params;
+	unsigned char last = SIGNAL_STOP, akt = SIGNAL_STOP;
+	int i = -1;
+	while(!do_exit) {
+		SLEEP(100);
+		i++; i %= 8; //100ms * 8 = 0,8s
+		if(dev->channels[0].axcindicate == NO_SIGNAL) {
+			//clear bit
+			akt &= ~(1UL << i);
+		}
+		else {
+			//set bit
+			akt |= 1UL << i;
+		}
+		if(last==SIGNAL_STOP && akt==SIGNAL_START) {
+			snprintf(description, sizeof(description), "VOX start %s %.3f", 
+				getTimeStampStr().c_str(),
+				dev->channels[0].freqlist[dev->channels[0].freq_idx].frequency / 1000000.0);
+			log(LOG_INFO, description);
+			zmq::message_t message_start(&description[0], strlen(description));
+			publisher.send(message_start, zmq::send_flags::none);
+			last = SIGNAL_START;
+		}
+		else if (last==SIGNAL_START && akt==SIGNAL_STOP) {
+			snprintf(description, sizeof(description), "VOX stop %s %.3f", 
+				getTimeStampStr().c_str(),
+				dev->channels[0].freqlist[dev->channels[0].freq_idx].frequency / 1000000.0);
+			log(LOG_INFO, description);
+			zmq::message_t message_stop(&description[0], strlen(description));
+			publisher.send(message_stop, zmq::send_flags::none);
+			last = SIGNAL_STOP;
+		}
+	}
+	snprintf(description, sizeof(description), "VOX bye %s", getTimeStampStr().c_str());
+	log(LOG_INFO, description);
+	zmq::message_t message_bye(&description[0], strlen(description));
+	publisher.send(message_bye, zmq::send_flags::none);
+	publisher.close();
+	return 0;
+}
+#endif
 
 void* controller_thread(void* params) {
 	device_t *dev = (device_t*)params;
@@ -129,7 +212,7 @@ void* controller_thread(void* params) {
 	int consecutive_squelch_off = 0;
 	int new_centerfreq = 0;
 	struct timeval tv;
-
+	
 	if(dev->channels[0].freq_count < 2) return 0;
 	while(!do_exit) {
 		SLEEP(200);
@@ -841,6 +924,11 @@ int main(int argc, char* argv[]) {
 		}
 		if(root.exists("log_scan_activity") && (bool)root["log_scan_activity"] == true)
 			log_scan_activity = true;
+#ifdef VOXZMQ
+		if(root.exists("vox_zmq_enabled") && (bool)root["vox_zmq_enabled"] == true)
+			vox_zmq_enabled = true;
+		if(root.exists("vox_zmq_host")) vox_zmq_host = strdup(root["vox_zmq_host"]);
+#endif
 		if(root.exists("stats_filepath"))
 			stats_filepath = strdup(root["stats_filepath"]);
 #ifdef NFM
@@ -1018,6 +1106,9 @@ int main(int argc, char* argv[]) {
 			}
 // FIXME: not needed when freq_count == 1?
 			pthread_create(&dev->controller_thread, NULL, &controller_thread, dev);
+#ifdef VOXZMQ
+			pthread_create(&dev->vox_zmq_thread, NULL, &vox_zmq_thread, dev);
+#endif
 		}
 	}
 
@@ -1080,6 +1171,10 @@ int main(int argc, char* argv[]) {
 	for (int i = 0; i < device_count; i++) {
 		if(devices[i].mode == R_SCAN)
 			pthread_join(devices[i].controller_thread, NULL);
+#ifdef VOXZMQ
+		if(devices[i].mode == R_SCAN)
+			pthread_join(devices[i].vox_zmq_thread, NULL);
+#endif
 		if(input_stop(devices[i].input) != 0 || devices[i].input->state != INPUT_STOPPED) {
 			if(errno != 0) {
 				log(LOG_ERR, "Failed do stop device #%d: %s\n", i, strerror(errno));
