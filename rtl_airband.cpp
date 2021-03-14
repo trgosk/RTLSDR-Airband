@@ -54,6 +54,7 @@
 #include <cstdarg>
 #include <cerrno>
 #include <iostream>
+#include <iomanip>
 #include <cstring>
 #include <cstdio>
 #include <cassert>
@@ -156,12 +157,12 @@ void* vox_zmq_thread(void* params) {
 	
 	snprintf(description, sizeof(description), "VOX hello1 %s", getTimeStampStr().c_str());
     zmq::message_t message_hello1(&description[0], strlen(description));
-	publisher.send(message_hello1, zmq::send_flags::none);
+	publisher.send(message_hello1, 0);
 	
 	SLEEP(200);
 	snprintf(description, sizeof(description), "VOX hello2 %s", getTimeStampStr().c_str());
     zmq::message_t message_hello2(&description[0], strlen(description));
-	publisher.send(message_hello2, zmq::send_flags::none);
+	publisher.send(message_hello2, 0);
 
 	const unsigned char SIGNAL_START = 255, SIGNAL_STOP = 0;
 	device_t *dev = (device_t*)params;
@@ -184,7 +185,7 @@ void* vox_zmq_thread(void* params) {
 				dev->channels[0].freqlist[dev->channels[0].freq_idx].frequency / 1000000.0);
 			log(LOG_INFO, description);
 			zmq::message_t message_start(&description[0], strlen(description));
-			publisher.send(message_start, zmq::send_flags::none);
+			publisher.send(message_start, 0);
 			last = SIGNAL_START;
 		}
 		else if (last==SIGNAL_START && akt==SIGNAL_STOP) {
@@ -193,14 +194,14 @@ void* vox_zmq_thread(void* params) {
 				dev->channels[0].freqlist[dev->channels[0].freq_idx].frequency / 1000000.0);
 			log(LOG_INFO, description);
 			zmq::message_t message_stop(&description[0], strlen(description));
-			publisher.send(message_stop, zmq::send_flags::none);
+			publisher.send(message_stop, 0);
 			last = SIGNAL_STOP;
 		}
 	}
 	snprintf(description, sizeof(description), "VOX bye %s", getTimeStampStr().c_str());
 	log(LOG_INFO, description);
 	zmq::message_t message_bye(&description[0], strlen(description));
-	publisher.send(message_bye, zmq::send_flags::none);
+	publisher.send(message_bye, 0);
 	publisher.close();
 	return 0;
 }
